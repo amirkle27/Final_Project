@@ -54,12 +54,15 @@ class LinearRegressionFacade:
 
         y_pred = self.model.predict(X_test)
         mse = mean_squared_error(y_test,y_pred)
+        rmse =  mse ** 0.5
+
         r2 = r2_score(y_test,y_pred)
 
         return {
             "model": self.model,
             "scaler": self.scaler,
             "mse": mse,
+            "rmse": rmse,
             "r2": r2,
             "y_test": y_test,
             "y_pred": y_pred
@@ -178,7 +181,7 @@ class RandomForestClassifierFacade:
 
 
 class LogisticRegressionFacade:
-    def __init__(self, test_size: float = 0.2, random_state: int = 27, solver='lbfgs', penalty='l2', C=1.0, max_iter: int = 1000):
+    def __init__(self, test_size: float = 0.2, random_state: int = 27, solver='lbfgs', penalty='l2', C=1.0, max_iter: int = 5000):
         self.preprocessor = LogisticRegressionPreprocessor()
         default_penalty = 'l2'
         default_solver = 'lbfgs'
@@ -401,6 +404,7 @@ class ANNFacade:
         self.model = None
         self.scaler = StandardScaler()
         self.fitted = False
+        self.label_encoder = None
 
     def build_model(self, input_dim: int, output_dim: int):
         model = Sequential()
@@ -420,6 +424,7 @@ class ANNFacade:
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
         X, y = self.preprocessor.process(df, target_col)
+
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size,
                                                             random_state=self.random_state)
 
@@ -442,11 +447,11 @@ class ANNFacade:
             "prediction": y_pred
         }
 
-    def predict(self, new_data: pd.DataFrame, target_col: Optional[str] = None) -> pd.DataFrame:
+    def predict(self, new_data: pd.DataFrame) -> pd.DataFrame:
         if not self.fitted:
             raise NotFittedError
 
-        X, _ = self.preprocessor.process(new_data, target_col=target_col)
+        X, _ = self.preprocessor.process(new_data)
         X_scaled = self.scaler.transform(X)
         probabilities = self.model.predict(X_scaled)
 
@@ -457,8 +462,13 @@ class ANNFacade:
             predicted_class = np.argmax(probabilities, axis=1)
             confidence = np.max(probabilities, axis=1)
 
+        if self.label_encoder:
+            predicted_label = self.label_encoder.inverse_transform(predicted_class)
+        else:
+            predicted_label = predicted_class
+
         results_df = pd.DataFrame({
-            "prediction": predicted_class,
+            "prediction": predicted_label,
             "confidence": confidence
         })
         prob_df = pd.DataFrame(probabilities, columns=[f"prob_class_{i}" for i in range(probabilities.shape[1])])
@@ -690,7 +700,7 @@ class PolynomialFacade:
         except MultipleFeaturesPolyError as e:
             print(e)
 
-    def get_optimal_x(self):
+    def predict(self, min_or_max:str='max'):
         if self.X.shape[1] == 1 and self.degree == 2:
             a = self.model.intercept_
             b = self.model.coef_[1]
@@ -703,7 +713,10 @@ class PolynomialFacade:
             def negative_prediction(x):
                 x = np.array(x).reshape(1, -1)
                 x_poly = self.poly.transform(x)
-                return -self.model.predict(x_poly)[0]
+                if min_or_max == 'max':
+                    return -self.model.predict(x_poly)[0]
+                else:
+                    return self.model.predict(x_poly)[0]
 
             bounds = []
             for col in self.X.columns:
