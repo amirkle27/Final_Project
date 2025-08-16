@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.tree import DecisionTreeClassifier
 
+import processing_facade
 from File_Converter_Factory import FileConverterFactory
 from processing_facade import PolynomialFacade, RandomForestClassifierFacade, KNNFacade, ANNFacade, \
     LinearRegressionFacade
@@ -33,9 +34,10 @@ def run_classification_model(model, df, new_row, model_name):
     print("-".center(50))
 
 
-def run_regression_model(model, df, new_row, model_name):
-    results = model.train_and_evaluate(df, target_col="final_grade")
+def run_regression_model(model, df, new_row, model_name, target_col):
+    results = model.train_and_evaluate(df, target_col= target_col)
     prediction = model.predict(new_row)
+
 
     if isinstance(prediction, pd.DataFrame) and 'prediction' in prediction.columns:
         pred_value = prediction['prediction'].iloc[0]
@@ -46,8 +48,9 @@ def run_regression_model(model, df, new_row, model_name):
 
     print()
     print(f"--- {model_name} ---")
+    print(f"MSE: {results['mse']:.2f}")
     print(f"RMSE: {results['rmse']:.2f}")
-    print(f"R² Score: {results['r2']: .2f}")
+    print(f"R² Score: {results['r2']:.2f}")
     print(f"Prediction for new row: {pred_value}")
     print()
     print("-".center(50))
@@ -95,8 +98,8 @@ def main():
         "part_time_job_Yes": 1
     }])
 
-    run_regression_model(LinearRegressionFacade(), df, new_row, "Linear Regression")
-    run_regression_model(PolynomialFacade(PolynomialRegressionPreprocessor(), 2), df, new_row, "Polynomial Regression")
+    run_regression_model(LinearRegressionFacade(), df, new_row, "Linear Regression", target_col="size")
+    run_regression_model(PolynomialFacade(PolynomialRegressionPreprocessor(), 2), df, new_row, "Polynomial Regression", target_col="size")
 
     # Tree
     # Regressor
