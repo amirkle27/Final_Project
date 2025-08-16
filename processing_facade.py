@@ -5,12 +5,17 @@ from sklearn.cluster import KMeans, DBSCAN
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, LogisticRegressionCV
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, silhouette_score
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from errors import InvalidPenaltySolverCombination, NotFittedError, MultipleFeaturesPolyError
+from tensorflow.python.ops.metrics_impl import accuracy
+from tensorflow.python.ops.numpy_ops.np_array_ops import shape
+from tensorflow.python.ops.numpy_ops.np_math_ops import square
+
+from errors import InvalidPenaltySolverCombination, NotFittedError, MultipleFeaturesPolyError, PolinomialMaxMinError,PolinomialNotDFError
 from preprocessoring_strategy import *
 
 from sklearn.preprocessing import StandardScaler
@@ -42,26 +47,35 @@ class LinearRegressionFacade:
         self.scaler = StandardScaler()
         self.test_size = test_size
         self.random_state = random_state
-
         self.model = LinearRegression()
+
+        self.feature_cols = None
+        self.is_categorical_y = False
+        self.label_encoder = None
+
     def train_and_evaluate(self, df:pd.DataFrame, target_col:str) -> dict:
         X, y = self.preprocessor.process(df, target_col)
-        X_scaled = pd.DataFrame(self.scaler.fit_transform(X), columns=X.columns)
+        self.feature_cols = X.columns
 
+        if y.dtype == 'object' or str(y.dtype).startswith('category'):
+            self.is_categorical_y = True
+            self.label_encoder = LabelEncoder()
+            y = pd.Series(self.label_encoder.fit_transform(y), index=y.index)
+
+        X_scaled = pd.DataFrame(self.scaler.fit_transform(X), columns=X.columns)
         X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=self.test_size, random_state=self.random_state)
 
         self.model.fit(X_train,y_train)
-
         y_pred = self.model.predict(X_test)
-        mse = mean_squared_error(y_test,y_pred)
-        rmse =  mse ** 0.5
 
-        r2 = r2_score(y_test,y_pred)
+        mse = mean_squared_error(y_test,y_pred)
+        rmse =  float(np.sqrt(mse))
+        r2 = float(r2_score(y_test,y_pred))
 
         return {
             "model": self.model,
             "scaler": self.scaler,
-            "mse": mse,
+            "mse": float(mse),
             "rmse": rmse,
             "r2": r2,
             "y_test": y_test,
@@ -69,8 +83,16 @@ class LinearRegressionFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
-        new_data_scaled = pd.DataFrame(self.scaler.transform(new_data), columns=new_data.columns)
-        return self.model.predict(new_data_scaled)
+        X_new = new_data.reindex(columns=self.feature_cols, fill_value=0)
+        X_new_scaled = pd.DataFrame(self.scaler.transform(X_new), columns=self.feature_cols)
+        y_hat = self.model.predict(X_new_scaled)
+
+        if self.is_categorical_y and self.label_encoder is not None:
+            idx = np.rint(y_hat).astype(int)
+            idx = np.clip(idx, 0, len(self.label_encoder.classes_) - 1)
+            return self.label_encoder.inverse_transform(idx)
+
+        return y_hat
 
 
 class DecisionTreeClassifierFacade:
@@ -181,11 +203,15 @@ class RandomForestClassifierFacade:
 
 
 class LogisticRegressionFacade:
+    from sklearn.pipeline import Pipeline
     def __init__(self, test_size: float = 0.2, random_state: int = 27, solver='lbfgs', penalty='l2', C=1.0, max_iter: int = 5000):
         self.preprocessor = LogisticRegressionPreprocessor()
+        self.max_iter = max_iter
+        self.solver = solver
+        self.C = C
+        self.pipeline = None
         default_penalty = 'l2'
         default_solver = 'lbfgs'
-
         self.penalty = penalty or default_penalty
         self.solver = solver or default_solver
 
@@ -218,16 +244,31 @@ class LogisticRegressionFacade:
         X, y = self.preprocessor.process(df, target_col)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
 
+        self.pipeline = Pipeline(steps = [
+            ('scaler', StandardScaler(with_mean=True,with_std=True)),
+            ('clf', LogisticRegression(max_iter=self.max_iter,
+                                       solver=self.solver,
+                                       C=self.C,
+                                       penalty=self.penalty))
+        ])
+
+        self.pipeline.fit(X_train,y_train)
+        acc = self.pipeline.score(X_test,y_test)
+
         self.model.fit(X_train, y_train)
         y_pred = self.model.predict(X_test)
-        accuracy = accuracy_score(y_test,y_pred)
+        accuracy = accuracy_score(y_test, y_pred)
 
         return {
             "model": self.model,
-            "accuracy": accuracy,
+            "accuracy": acc,
             "y_test": y_test,
             "prediction": y_pred
         }
+
+
+
+
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
         return self.model.predict(new_data)
@@ -394,6 +435,7 @@ class KNNFacade:
 
 
 class ANNFacade:
+    from tensorflow.keras import Input
     def __init__(self, test_size: float = 0.2, random_state: int = 27, hidden_layers: list = [64, 32], epochs: int = 20, batch_size: int = 32):
         self.test_size = test_size
         self.random_state = random_state
@@ -408,12 +450,12 @@ class ANNFacade:
 
     def build_model(self, input_dim: int, output_dim: int):
         model = Sequential()
-        model.add(Dense(self.hidden_layers[0], input_dim=input_dim, activation='relu'))
+        model.add(Dense(self.hidden_layers[0], activation='relu'))
         for units in self.hidden_layers[1:]:
             model.add(Dense(units, activation='relu'))
 
         if output_dim == 1:
-            model.add(Dense(1, activation='sigmoid'))
+            model.add(Dense(1, activation='sigmoid', shape= input_dim))
             loss = BinaryCrossentropy()
         else:
             model.add(Dense(output_dim, activation='softmax'))
@@ -424,6 +466,7 @@ class ANNFacade:
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
         X, y = self.preprocessor.process(df, target_col)
+        self.label_encoder = self.preprocessor.label_encoder
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size,
                                                             random_state=self.random_state)
@@ -661,22 +704,41 @@ class PolynomialFacade:
         self.y = None
         self.X_poly = None
         self.y_pred = None
+        self.feature_cols = None
+
+        self.is_categorical_y = False
+        self.label_encoder = None
 
     def train_and_evaluate(self, df, target_col: str):
         X_raw, y, poly = self.preprocessor.process(df, target_col)
         self.poly = poly
         self.X = X_raw
         self.y = y
-        self.X_poly = self.poly.fit_transform(X_raw)
-        self.model.fit(self.X_poly, y)
-        self.y_pred = self.model.predict(self.X_poly)
-        r2 = r2_score(self.y, self.y_pred)
-        mse = mean_squared_error(self.y, self.y_pred)
+        self.feature_cols = X_raw.columns
+
+        if y.dtype == 'object' or str(y.dtype).startswith('category'):
+            self.is_categorical_y = True
+            self.label_encoder = LabelEncoder()
+            y = pd.Series(self.label_encoder.fit_transform(y), index=y.index)
+
+        X_train, X_test, y_train, y_test = train_test_split(X_raw, y, test_size=0.2, random_state=42)
+        X_train_poly = self.poly.fit_transform(X_train)
+        X_test_poly = self.poly.transform(X_test)
+
+        self.model.fit(X_train_poly, y_train)
+        y_pred = self.model.predict(X_test_poly)
+
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = float(np.sqrt(mse))
+        r2 = float(r2_score(y_test, y_pred))
+
 
         return {
-            "R²": f"{r2:.4f}",
-            "mse": f"{mse:.2f}",
+            "mse": float(mse),
+            "rmse": rmse,
+            "r2": r2
         }
+
 
 
     def plot(self):
@@ -700,7 +762,19 @@ class PolynomialFacade:
         except MultipleFeaturesPolyError as e:
             print(e)
 
-    def predict(self, min_or_max:str='max'):
+    def predict_row(self, new_row: pd.DataFrame):
+        new_row_aligned = new_row.reindex(columns=self.feature_cols, fill_value=0)
+        Xp = self.poly.transform(new_row_aligned)
+        y_hat = self.model.predict(Xp)
+
+        if self.is_categorical_y and self.label_encoder is not None:
+            idx = np.rint(y_hat).astype(int)
+            idx = np.clip(idx, 0, len(self.label_encoder.classes_) - 1)
+            return self.label_encoder.inverse_transform(idx)
+
+        return y_hat
+
+    def predict_opt(self, min_or_max:str='max'):
         if self.X.shape[1] == 1 and self.degree == 2:
             a = self.model.intercept_
             b = self.model.coef_[1]
@@ -712,11 +786,10 @@ class PolynomialFacade:
         else:
             def negative_prediction(x):
                 x = np.array(x).reshape(1, -1)
-                x_poly = self.poly.transform(x)
-                if min_or_max == 'max':
-                    return -self.model.predict(x_poly)[0]
-                else:
-                    return self.model.predict(x_poly)[0]
+                x_df = pd.DataFrame(x, columns=self.feature_cols)
+                x_poly = self.poly.transform(x_df)
+                pred = self.model.predict(x_poly)[0]
+                return -pred if min_or_max == 'max' else pred
 
             bounds = []
             for col in self.X.columns:
@@ -726,12 +799,20 @@ class PolynomialFacade:
             initial_guess = self.X.mean().values.tolist()
             result = minimize(negative_prediction, x0=initial_guess, bounds=bounds)
             x_opt = result.x
-            y_opt = -result.fun
+            y_opt = -result.fun if min_or_max == 'max' else result.fun
             print("Optimal feature values for highest prediction:")
             for name, value in zip(self.X.columns, x_opt):
                 print(f"{name}: {value:.2f}")
             print(f"Predicted y = {y_opt:.2f}")
             return x_opt, y_opt
 
+    def predict(self, arg='row'):
+        if isinstance(arg, pd.DataFrame):
+            return self.predict_row(arg)
+        if isinstance(arg, str):
+            if arg not in ('max', 'min'):
+                raise PolinomialMaxMinError
+            return self.predict_opt(arg)
+        raise PolinomialNotDFError
 
 
