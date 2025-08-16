@@ -17,6 +17,24 @@ class MultipleFeaturesPolyError(Exception):
         """Raised when a clustered model is not fitted correctly before predicting new data"""
         super().__init__("Cannot plot: Only works for 1 feature.")
 
+class PolinomialMaxMinError(Exception):
+    def __init__(self):
+        """Raised when a clustered model is not fitted correctly before predicting new data"""
+        super().__init__("PolynomialFacade.predict: expected 'max' or 'min' for optimization.")
 
+class PolinomialNotDFError(Exception):
+    def __init__(self):
+        """Raised when a clustered model is not fitted correctly before predicting new data"""
+        super().__init__("PolynomialFacade.predict: pass a DataFrame (row prediction) or 'max'/'min' (optimization).")
 
-
+    # if isinstance(model, PolynomialFacade):
+    #     prediction = model.predict_row(new_row)
+    # else:
+    #     prediction = model.predict(new_row)
+    #
+    # if isinstance(prediction, pd.DataFrame) and 'prediction' in prediction.columns:
+    #     pred_value = prediction['prediction'].iloc[0]
+    # elif isinstance(prediction, (pd.Series, np.ndarray)):
+    #     pred_value = prediction[0]
+    # else:
+    #     pred_value = str(prediction)
